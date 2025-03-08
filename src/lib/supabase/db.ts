@@ -1,15 +1,19 @@
 // src/lib/supabase/db.ts
 import { createClient } from '@supabase/supabase-js';
 import { toast } from 'sonner';
+import { supabaseAdmin } from './admin-client';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+;
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Customer operations
 export async function createCustomer(customerData: any) {
-  const { data, error } = await supabase
+  console.log('Attempting to create customer with data:', customerData);
+  
+  const { data, error } = await supabaseAdmin
     .from('customers')
     .insert(customerData)
     .select()

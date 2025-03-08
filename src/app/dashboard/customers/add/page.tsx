@@ -42,7 +42,7 @@ export default function AddCustomerPage() {
       const newCustomer = await createCustomer(data);
       
       toast.success('Customer created successfully!');
-      router.push(`/customers/${newCustomer.id}`);
+      router.push(`/dashboard/customers/${newCustomer.id}`);
     } catch (error) {
       console.error('Error creating customer:', error);
     } finally {
