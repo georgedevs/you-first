@@ -1,3 +1,4 @@
+// src/app/dashboard/loans/[id]/page.tsx
 "use client"
 
 import { useState, useEffect } from 'react';
@@ -6,28 +7,29 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 import { 
   ArrowLeft, 
-  DollarSign, 
   Calendar, 
   CheckCircle,
-  AlertCircle,
-  Clock3,
+  Clock,
   Loader2,
-  FileText,
+  X,
+  AlertTriangle,
+  CreditCard,
+  DollarSign,
   Download
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
 export default function LoanDetailPage() {
   const [loan, setLoan] = useState<any>(null);
   const [customer, setCustomer] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [updatingPaymentId, setUpdatingPaymentId] = useState<string | null>(null);
+  const [updatingPayment, setUpdatingPayment] = useState<string | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<any>(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   
   const params = useParams();
   const loanId = params.id as string;
-  const supabase = createClientComponentClient();
   
   useEffect(() => {
     async function fetchLoanData() {
@@ -35,35 +37,28 @@ export default function LoanDetailPage() {
         setLoading(true);
         
         // Fetch loan details
-        const { data: loanData, error: loanError } = await supabase
-          .from('loans')
-          .select('*')
-          .eq('id', loanId)
-          .single();
-          
-        if (loanError) throw loanError;
+        const loanResponse = await fetch(`/api/loans/${loanId}`);
+        if (!loanResponse.ok) {
+          throw new Error('Failed to fetch loan details');
+        }
+        const loanData = await loanResponse.json();
         setLoan(loanData);
         
         // Fetch customer details
-        const { data: customerData, error: customerError } = await supabase
-          .from('customers')
-          .select('*')
-          .eq('id', loanData.customer_id)
-          .single();
-          
-        if (customerError) throw customerError;
+        const customerResponse = await fetch(`/api/customers/${loanData.customer_id}`);
+        if (!customerResponse.ok) {
+          throw new Error('Failed to fetch customer details');
+        }
+        const customerData = await customerResponse.json();
         setCustomer(customerData);
         
         // Fetch payment schedule
-        const { data: paymentsData, error: paymentsError } = await supabase
-          .from('payments')
-          .select('*')
-          .eq('loan_id', loanId)
-          .order('month_number', { ascending: true });
-          
-        if (paymentsError) throw paymentsError;
-        setPayments(paymentsData || []);
-        
+        const paymentsResponse = await fetch(`/api/loans/${loanId}/payments`);
+        if (!paymentsResponse.ok) {
+          throw new Error('Failed to fetch payment schedule');
+        }
+        const paymentsData = await paymentsResponse.json();
+        setPayments(paymentsData);
       } catch (error) {
         console.error('Error fetching loan data:', error);
         toast.error('Failed to load loan details');
@@ -73,64 +68,111 @@ export default function LoanDetailPage() {
     }
     
     fetchLoanData();
-  }, [loanId, supabase]);
+  }, [loanId]);
   
-  const handleUpdatePaymentStatus = async (paymentId: string, newStatus: 'PAID' | 'NOT_PAID' | 'PENDING') => {
+  const updatePaymentStatus = async (paymentId: string, status: 'PAID' | 'NOT_PAID' | 'PENDING') => {
     try {
-      setUpdatingPaymentId(paymentId);
+      setUpdatingPayment(paymentId);
       
-      const { error } = await supabase
-        .from('payments')
-        .update({ 
-          status: newStatus,
-          updated_at: new Date().toISOString() 
-        })
-        .eq('id', paymentId)
-        .select()
-        .single();
+      const response = await fetch(`/api/payments/${paymentId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status }),
+      });
       
-      if (error) throw error;
+      if (!response.ok) {
+        throw new Error('Failed to update payment status');
+      }
       
-      // Update local state
+      // Update payments list
       setPayments(payments.map(payment => 
-        payment.id === paymentId ? { ...payment, status: newStatus } : payment
+        payment.id === paymentId ? { ...payment, status } : payment
       ));
       
-      toast.success(`Payment marked as ${newStatus.toLowerCase()}`);
+      toast.success(`Payment status updated to ${status}`);
     } catch (error) {
       console.error('Error updating payment status:', error);
       toast.error('Failed to update payment status');
     } finally {
-      setUpdatingPaymentId(null);
+      setUpdatingPayment(null);
+      setShowPaymentModal(false);
     }
   };
   
-  const getStatusBadgeClasses = (status: string) => {
-    switch (status) {
-      case 'PAID':
-        return 'bg-green-100 text-green-800';
-      case 'PENDING':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'NOT_PAID':
-        return 'bg-red-100 text-red-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
+  const openPaymentModal = (payment: any) => {
+    setSelectedPayment(payment);
+    setShowPaymentModal(true);
+  };
+  
+  // Calculate summary statistics
+  const calculateSummary = () => {
+    if (!payments.length) return {
+      totalAmount: 0,
+      totalPaid: 0,
+      totalPending: 0,
+      totalOutstanding: 0,
+      progressPercentage: 0
+    };
+    
+    const totalAmount = payments.reduce((sum, payment) => sum + payment.amount, 0);
+    const totalPaid = payments.reduce((sum, payment) => payment.status === 'PAID' ? sum + payment.amount : sum, 0);
+    const totalPending = payments.reduce((sum, payment) => payment.status === 'PENDING' ? sum + payment.amount : sum, 0);
+    const totalOutstanding = totalAmount - totalPaid;
+    const progressPercentage = Math.round((totalPaid / totalAmount) * 100);
+    
+    return {
+      totalAmount,
+      totalPaid,
+      totalPending,
+      totalOutstanding,
+      progressPercentage
+    };
+  };
+  
+  const summary = calculateSummary();
+  
+  // Get payment status indicator
+  const getStatusIndicator = (status: string, dueDate: string) => {
+    const today = new Date();
+    const due = new Date(dueDate);
+    
+    if (status === 'PAID') {
+      return {
+        color: 'text-green-500',
+        bgColor: 'bg-green-100',
+        borderColor: 'border-green-200',
+        icon: <CheckCircle className="h-5 w-5" />,
+        text: 'Paid'
+      };
+    } else if (status === 'PENDING') {
+      return {
+        color: 'text-yellow-500',
+        bgColor: 'bg-yellow-100',
+        borderColor: 'border-yellow-200',
+        icon: <Clock className="h-5 w-5" />,
+        text: 'Pending'
+      };
+    } else if (due < today) {
+      return {
+        color: 'text-red-500',
+        bgColor: 'bg-red-100',
+        borderColor: 'border-red-200',
+        icon: <AlertTriangle className="h-5 w-5" />,
+        text: 'Overdue'
+      };
+    } else {
+      return {
+        color: 'text-gray-500',
+        bgColor: 'bg-gray-100',
+        borderColor: 'border-gray-200',
+        icon: <Calendar className="h-5 w-5" />,
+        text: 'Not Paid'
+      };
     }
   };
-
-  const getPaymentStatusIcon = (status: string) => {
-    switch (status) {
-      case 'PAID':
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
-      case 'PENDING':
-        return <Clock3 className="h-5 w-5 text-yellow-500" />;
-      case 'NOT_PAID':
-        return <AlertCircle className="h-5 w-5 text-red-500" />;
-      default:
-        return null;
-    }
-  };
-
+  
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen -mt-16">
@@ -146,45 +188,28 @@ export default function LoanDetailPage() {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen -mt-16">
         <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
-          <DollarSign className="h-8 w-8 text-red-500" />
+          <CreditCard className="h-8 w-8 text-red-500" />
         </div>
         <h3 className="text-lg font-medium text-gray-900 mb-1">Loan not found</h3>
         <p className="text-gray-500 mb-4">
-          The loan you&apos;re looking for doesn&apos;t exist or has been removed.
+          The loan you're looking for doesn't exist or has been removed.
         </p>
         <Link
-          href="/dashboard"
+          href="/dashboard/customers"
           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-brand-blue hover:bg-brand-blue-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-blue"
         >
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Dashboard
+          Back to Customers
         </Link>
       </div>
     );
   }
   
-  // Calculate loan summary
-  const totalPrincipal = loan.principal;
-  const totalPaid = payments
-    .filter(payment => payment.status === 'PAID')
-    .reduce((sum, payment) => sum + payment.amount, 0);
-  const totalPending = payments
-    .filter(payment => payment.status === 'PENDING')
-    .reduce((sum, payment) => sum + payment.amount, 0);
-  const totalRemaining = payments
-    .filter(payment => payment.status === 'NOT_PAID')
-    .reduce((sum, payment) => sum + payment.amount, 0);
-  
-  // Calculate payment statistics
-  const paidCount = payments.filter(payment => payment.status === 'PAID').length;
-  const pendingCount = payments.filter(payment => payment.status === 'PENDING').length;
-  const remainingCount = payments.filter(payment => payment.status === 'NOT_PAID').length;
-  
   return (
     <div>
       <div className="mb-6">
         <Link 
-          href={`/customers/${customer.id}`}
+          href={`/dashboard/customers/${customer.id}`}
           className="inline-flex items-center text-gray-500 hover:text-gray-700"
         >
           <ArrowLeft className="h-4 w-4 mr-1" />
@@ -192,277 +217,280 @@ export default function LoanDetailPage() {
         </Link>
       </div>
       
-      {/* Loan header */}
+      {/* Loan Header */}
       <div className="bg-white shadow rounded-xl overflow-hidden mb-6">
-        <div className="p-6 sm:p-8 bg-gradient-to-r from-brand-blue to-brand-blue-light text-white">
+        <div className="p-6 sm:p-8 border-b border-gray-200">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center">
             <div className="flex items-center mb-4 sm:mb-0">
-              <div className="h-16 w-16 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center mr-4">
-                <DollarSign className="h-8 w-8 text-white" />
+              <div className="h-16 w-16 rounded-full bg-brand-blue-50 flex items-center justify-center mr-4">
+                <CreditCard className="h-8 w-8 text-brand-blue" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold mb-1">
-                  {formatCurrency(loan.principal)}
+                <h1 className="text-2xl font-bold text-gray-900">
+                  Loan Details
                 </h1>
-                <div className="flex items-center space-x-2">
-                  <span className="bg-white/20 px-2 py-0.5 rounded-full text-sm backdrop-blur-sm">
-                    {loan.interest_rate}% Interest
-                  </span>
-                  <span className="bg-white/20 px-2 py-0.5 rounded-full text-sm backdrop-blur-sm">
-                    {loan.duration_months} Months
-                  </span>
-                </div>
+                <p className="text-gray-500">
+                  For {customer.first_name} {customer.last_name} on {new Date(loan.disbursement_date).toLocaleDateString()}
+                </p>
               </div>
             </div>
             
-            <div className="flex flex-col items-end space-y-1">
-              <div className="text-sm text-white/80">Disbursement Date</div>
-              <div className="font-semibold flex items-center">
-                <Calendar className="h-4 w-4 mr-1" />
-                {new Date(loan.disbursement_date).toLocaleDateString()}
+            <div className="flex space-x-3">
+              <button
+                type="button"
+                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-blue"
+              >
+                <Download className="h-4 w-4 mr-2 text-gray-500" />
+                Export
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+          <div className="p-6 flex items-center">
+            <div className="flex-shrink-0">
+              <div className="h-10 w-10 rounded-md bg-blue-100 flex items-center justify-center">
+                <DollarSign className="h-5 w-5 text-blue-600" />
+              </div>
+            </div>
+            <div className="ml-4">
+              <h3 className="text-sm font-medium text-gray-500">Principal</h3>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{formatCurrency(loan.principal)}</p>
+            </div>
+          </div>
+          
+          <div className="p-6 flex items-center">
+            <div className="flex-shrink-0">
+              <div className="h-10 w-10 rounded-md bg-orange-100 flex items-center justify-center">
+                <CreditCard className="h-5 w-5 text-orange-600" />
+              </div>
+            </div>
+            <div className="ml-4">
+              <h3 className="text-sm font-medium text-gray-500">Interest Rate</h3>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{loan.interest_rate}%</p>
+            </div>
+          </div>
+          
+          <div className="p-6 flex items-center">
+            <div className="flex-shrink-0">
+              <div className="h-10 w-10 rounded-md bg-purple-100 flex items-center justify-center">
+                <Calendar className="h-5 w-5 text-purple-600" />
+              </div>
+            </div>
+            <div className="ml-4">
+              <h3 className="text-sm font-medium text-gray-500">Duration</h3>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{loan.duration_months} months</p>
+            </div>
+          </div>
+          
+          <div className="p-6 flex items-center">
+            <div className="flex-shrink-0">
+              <div className="h-10 w-10 rounded-md bg-green-100 flex items-center justify-center">
+                <CheckCircle className="h-5 w-5 text-green-600" />
+              </div>
+            </div>
+            <div className="ml-4">
+              <h3 className="text-sm font-medium text-gray-500">Repayment Progress</h3>
+              <div className="mt-1">
+                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                  <div 
+                    className="bg-green-600 h-2.5 rounded-full" 
+                    style={{ width: `${summary.progressPercentage}%` }}
+                  ></div>
+                </div>
+                <p className="mt-1 text-sm font-medium text-gray-700">{summary.progressPercentage}% complete</p>
               </div>
             </div>
           </div>
         </div>
-        
-        {/* Customer info */}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <div className="flex items-center">
-            <div className="h-10 w-10 rounded-full bg-brand-blue-50 flex items-center justify-center mr-3">
-              <span className="text-brand-blue font-medium">
-                {customer.first_name?.[0]}{customer.last_name?.[0]}
-              </span>
-            </div>
-            <div>
-              <h2 className="text-sm font-medium text-gray-500">Customer</h2>
-              <Link
-                href={`/customers/${customer.id}`}
-                className="text-brand-blue hover:underline"
-              >
-                {customer.first_name} {customer.last_name}
-              </Link>
-            </div>
-          </div>
-          
-          <div className="px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-            Active
-          </div>
-        </div>
-        
-        {/* Loan summary */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-gray-200">
-          <div className="p-4 sm:p-6">
-            <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Total Loan</h3>
-            <p className="mt-2 text-xl font-semibold text-gray-900">{formatCurrency(totalPrincipal)}</p>
-          </div>
-          
-          <div className="p-4 sm:p-6">
-            <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Paid</h3>
-            <p className="mt-2 text-xl font-semibold text-green-600">{formatCurrency(totalPaid)}</p>
-            <span className="text-xs text-gray-500">{paidCount} of {payments.length} payments</span>
-          </div>
-          
-          <div className="p-4 sm:p-6">
-            <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Pending</h3>
-            <p className="mt-2 text-xl font-semibold text-yellow-600">{formatCurrency(totalPending)}</p>
-            <span className="text-xs text-gray-500">{pendingCount} payments</span>
-          </div>
-          
-          <div className="p-4 sm:p-6">
-            <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Remaining</h3>
-            <p className="mt-2 text-xl font-semibold text-gray-900">{formatCurrency(totalRemaining)}</p>
-            <span className="text-xs text-gray-500">{remainingCount} payments</span>
-          </div>
-        </div>
       </div>
       
-      {/* Payment schedule */}
+      {/* Loan Summary */}
       <div className="bg-white shadow rounded-xl overflow-hidden mb-6">
-        <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-lg font-medium text-gray-900">Payment Schedule</h2>
-          <div className="flex space-x-3">
-            <button
-              type="button"
-              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-blue"
-            >
-              <FileText className="h-4 w-4 mr-2" />
-              Print
-            </button>
-            <button
-              type="button"
-              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-blue"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Export
-            </button>
-          </div>
+        <div className="px-6 py-5 border-b border-gray-200">
+          <h2 className="text-lg font-medium text-gray-900">Payment Summary</h2>
         </div>
         
-        {payments.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Month
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Due Date
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Principal
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Interest
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Amount
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {payments.map((payment) => {
-                  const isPastDue = new Date(payment.due_date) < new Date() && payment.status !== 'PAID';
-                  return (
-                    <tr key={payment.id} className={
-                      isPastDue ? 'bg-red-50' : (
-                        payment.status === 'PAID' ? 'bg-green-50' : ''
-                      )
-                    }>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {payment.month_number}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(payment.due_date).toLocaleDateString()}
-                        {isPastDue && (
-                          <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
-                            Overdue
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                        {formatCurrency(payment.principal)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
-                        {formatCurrency(payment.interest)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-right">
-                        {formatCurrency(payment.amount)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-center">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClasses(payment.status)}`}>
-                          {getPaymentStatusIcon(payment.status)}
-                          <span className="ml-1">{payment.status.replace('_', ' ')}</span>
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        {updatingPaymentId === payment.id ? (
-                          <span className="text-gray-500">
-                            <Loader2 className="h-4 w-4 animate-spin inline-block" />
-                          </span>
-                        ) : (
-                          <div className="flex justify-end space-x-3">
-                            {payment.status !== 'PAID' && (
-                              <button
-                                type="button"
-                                className="text-green-600 hover:text-green-900"
-                                onClick={() => handleUpdatePaymentStatus(payment.id, 'PAID')}
-                              >
-                                Mark Paid
-                              </button>
-                            )}
-                            {payment.status !== 'PENDING' && (
-                              <button
-                                type="button"
-                                className="text-yellow-600 hover:text-yellow-900"
-                                onClick={() => handleUpdatePaymentStatus(payment.id, 'PENDING')}
-                              >
-                                Mark Pending
-                              </button>
-                            )}
-                            {payment.status !== 'NOT_PAID' && (
-                              <button
-                                type="button"
-                                className="text-red-600 hover:text-red-900"
-                                onClick={() => handleUpdatePaymentStatus(payment.id, 'NOT_PAID')}
-                              >
-                                Mark Unpaid
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-6">
+          <div className="bg-blue-50 rounded-xl p-5 border border-blue-200">
+            <h3 className="text-sm font-medium text-gray-500 mb-2">Total Loan Amount</h3>
+            <p className="text-2xl font-bold text-gray-900">{formatCurrency(summary.totalAmount)}</p>
+            <p className="text-sm text-blue-600 mt-1">Full amount to be repaid</p>
           </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-              <Calendar className="h-8 w-8 text-gray-400" />
-            </div>
-            <h3 className="text-lg font-medium text-gray-900 mb-1">No payments scheduled</h3>
-            <p className="text-gray-500 max-w-md">
-              This loan doesn&apos;t have any payments scheduled yet.
-            </p>
+          
+          <div className="bg-green-50 rounded-xl p-5 border border-green-200">
+            <h3 className="text-sm font-medium text-gray-500 mb-2">Amount Paid</h3>
+            <p className="text-2xl font-bold text-gray-900">{formatCurrency(summary.totalPaid)}</p>
+            <p className="text-sm text-green-600 mt-1">Total payments received</p>
           </div>
-        )}
+          
+          <div className="bg-orange-50 rounded-xl p-5 border border-orange-200">
+            <h3 className="text-sm font-medium text-gray-500 mb-2">Outstanding Balance</h3>
+            <p className="text-2xl font-bold text-gray-900">{formatCurrency(summary.totalOutstanding)}</p>
+            <p className="text-sm text-orange-600 mt-1">Remaining amount to be paid</p>
+          </div>
+        </div>
       </div>
       
-      {/* Payment history timeline */}
+      {/* Payment Schedule */}
       <div className="bg-white shadow rounded-xl overflow-hidden">
         <div className="px-6 py-5 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">Payment History</h2>
+          <h2 className="text-lg font-medium text-gray-900">Payment Schedule</h2>
         </div>
         
-        <div className="flow-root px-6 py-6">
-          {payments.filter(payment => payment.status === 'PAID').length > 0 ? (
-            <ul className="-mb-8">
-              {payments
-                .filter(payment => payment.status === 'PAID')
-                .map((payment, index, filteredArray) => (
-                <li key={payment.id}>
-                  <div className="relative pb-8">
-                    {index < filteredArray.length - 1 ? (
-                      <span className="absolute top-5 left-5 -ml-px h-full w-0.5 bg-gray-200" aria-hidden="true"></span>
-                    ) : null}
-                    <div className="relative flex items-start space-x-3">
-                      <div>
-                        <div className="relative px-1">
-                          <div className="h-8 w-8 bg-green-100 rounded-full flex items-center justify-center ring-8 ring-white">
-                            <CheckCircle className="h-5 w-5 text-green-600" />
-                          </div>
-                        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Month
+                </th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Due Date
+                </th>
+                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Principal
+                </th>
+                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Interest
+                </th>
+                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Amount
+                </th>
+                <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Status
+                </th>
+                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Action
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {payments.map((payment, index) => {
+                const statusData = getStatusIndicator(payment.status, payment.due_date);
+                
+                return (
+                  <tr key={payment.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {payment.month_number}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {new Date(payment.due_date).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
+                      {formatCurrency(payment.principal)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">
+                      {formatCurrency(payment.interest)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-right">
+                      {formatCurrency(payment.amount)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center justify-center">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusData.bgColor} ${statusData.color} border ${statusData.borderColor}`}>
+                          {statusData.icon}
+                          <span className="ml-1">{statusData.text}</span>
+                        </span>
                       </div>
-                      <div className="min-w-0 flex-1 py-1.5">
-                        <div className="text-sm text-gray-500">
-                          <span className="font-medium text-gray-900">Payment Received</span>
-                          {" "} for Month {payment.month_number} - {formatCurrency(payment.amount)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                      {updatingPayment === payment.id ? (
+                        <div className="flex justify-end">
+                          <Loader2 className="h-5 w-5 text-brand-blue animate-spin" />
                         </div>
-                        <div className="mt-1 text-sm text-gray-500">
-                          <span>Received on {new Date(payment.updated_at).toLocaleDateString()}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-center py-4">
-              <p className="text-gray-500">No payments have been recorded yet.</p>
-            </div>
-          )}
+                      ) : (
+                        <button
+                          onClick={() => openPaymentModal(payment)}
+                          className="text-brand-blue hover:text-brand-blue-dark"
+                        >
+                          Update Status
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
+      
+      {/* Payment Status Modal */}
+      {showPaymentModal && selectedPayment && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-medium text-gray-900">Update Payment Status</h3>
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                className="text-gray-400 hover:text-gray-500"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <div className="px-6 py-4">
+              <div className="mb-4">
+                <p className="text-sm text-gray-500">Month {selectedPayment.month_number} Payment</p>
+                <p className="text-lg font-bold text-gray-900 mt-1">{formatCurrency(selectedPayment.amount)}</p>
+                <p className="text-sm text-gray-500 mt-1">Due on {new Date(selectedPayment.due_date).toLocaleDateString()}</p>
+              </div>
+              
+              <div className="space-y-3">
+                <button
+                  onClick={() => updatePaymentStatus(selectedPayment.id, 'PAID')}
+                  disabled={updatingPayment === selectedPayment.id}
+                  className={`flex items-center w-full px-4 py-3 ${
+                    selectedPayment.status === 'PAID' 
+                      ? 'bg-green-50 border-green-300 text-green-800' 
+                      : 'bg-white border-gray-300 text-gray-700 hover:bg-green-50'
+                  } border rounded-md`}
+                >
+                  <CheckCircle className={`h-5 w-5 ${selectedPayment.status === 'PAID' ? 'text-green-500' : 'text-gray-400'} mr-3`} />
+                  Mark as Paid
+                </button>
+                
+                <button
+                  onClick={() => updatePaymentStatus(selectedPayment.id, 'PENDING')}
+                  disabled={updatingPayment === selectedPayment.id}
+                  className={`flex items-center w-full px-4 py-3 ${
+                    selectedPayment.status === 'PENDING' 
+                      ? 'bg-yellow-50 border-yellow-300 text-yellow-800' 
+                      : 'bg-white border-gray-300 text-gray-700 hover:bg-yellow-50'
+                  } border rounded-md`}
+                >
+                  <Clock className={`h-5 w-5 ${selectedPayment.status === 'PENDING' ? 'text-yellow-500' : 'text-gray-400'} mr-3`} />
+                  Mark as Pending
+                </button>
+                
+                <button
+                  onClick={() => updatePaymentStatus(selectedPayment.id, 'NOT_PAID')}
+                  disabled={updatingPayment === selectedPayment.id}
+                  className={`flex items-center w-full px-4 py-3 ${
+                    selectedPayment.status === 'NOT_PAID' 
+                      ? 'bg-gray-100 border-gray-300 text-gray-800' 
+                      : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                  } border rounded-md`}
+                >
+                  <X className={`h-5 w-5 ${selectedPayment.status === 'NOT_PAID' ? 'text-gray-500' : 'text-gray-400'} mr-3`} />
+                  Mark as Not Paid
+                </button>
+              </div>
+            </div>
+            
+            <div className="px-6 py-4 bg-gray-50 flex justify-end">
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                className="px-4 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-blue"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

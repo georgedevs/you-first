@@ -1,7 +1,7 @@
 // src/components/LoanCalculator.tsx
 "use client"
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { formatCurrency } from '@/lib/utils';
 import { toast } from 'sonner';
 import DatePicker from 'react-datepicker';
@@ -12,7 +12,8 @@ import {
   ArrowRight, 
   Calendar,
   CheckCircle,
-  Loader
+  Loader,
+  X
 } from 'lucide-react';
 
 type LoanResult = {
@@ -26,25 +27,44 @@ type LoanResult = {
 
 interface LoanCalculatorProps {
   onCalculate?: (results: LoanResult[], totalInterest: number, totalAmount: number) => void;
+  onClose?: () => void;
   customerId?: string;
   isNewLoan?: boolean;
+  initialPrincipal?: number;
+  initialInterestRate?: number;
+  initialDuration?: number;
+  initialDisbursementDate?: Date;
 }
 
 export default function LoanCalculator({ 
   onCalculate, 
+  onClose,
   customerId, 
-  isNewLoan = false 
+  isNewLoan = false,
+  initialPrincipal,
+  initialInterestRate,
+  initialDuration,
+  initialDisbursementDate
 }: LoanCalculatorProps) {
-  const [principal, setPrincipal] = useState('');
-  const [interestRate, setInterestRate] = useState('10');
-  const [duration, setDuration] = useState('');
-  const [disbursementDate, setDisbursementDate] = useState<Date | null>(new Date());
+  const [principal, setPrincipal] = useState(initialPrincipal ? String(initialPrincipal) : '');
+  const [interestRate, setInterestRate] = useState(initialInterestRate ? String(initialInterestRate) : '10');
+  const [duration, setDuration] = useState(initialDuration ? String(initialDuration) : '');
+  const [disbursementDate, setDisbursementDate] = useState<Date | null>(initialDisbursementDate || new Date());
   const [results, setResults] = useState<LoanResult[]>([]);
   const [totalPrincipal, setTotalPrincipal] = useState(0);
   const [totalInterest, setTotalInterest] = useState(0);
   const [totalAmount, setTotalAmount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreatingLoan, setIsCreatingLoan] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
+
+  // Update the form when props change
+  useEffect(() => {
+    if (initialPrincipal) setPrincipal(String(initialPrincipal));
+    if (initialInterestRate) setInterestRate(String(initialInterestRate));
+    if (initialDuration) setDuration(String(initialDuration));
+    if (initialDisbursementDate) setDisbursementDate(initialDisbursementDate);
+  }, [initialPrincipal, initialInterestRate, initialDuration, initialDisbursementDate]);
 
   const calculateLoan = () => {
     if (!principal || !duration || !disbursementDate) {
@@ -78,7 +98,7 @@ export default function LoanCalculator({
           const monthlyAmount = monthlyPrincipal + monthlyInterest;
           
           // Calculate due date for this month
-          const dueDate = new Date(disbursementDate);
+          const dueDate = new Date(disbursementDate as Date);
           dueDate.setMonth(dueDate.getMonth() + month);
           
           calculationResults.push({
@@ -116,7 +136,56 @@ export default function LoanCalculator({
       } finally {
         setIsLoading(false);
       }
-    }, 800);
+    }, 500);
+  };
+
+  const createLoan = async () => {
+    if (!customerId || results.length === 0) {
+      toast.error('Missing required data for loan creation');
+      return;
+    }
+
+    setIsCreatingLoan(true);
+
+    try {
+      const loanData = {
+        customerId,
+        principal: totalPrincipal,
+        interestRate: parseInt(interestRate),
+        durationMonths: parseInt(duration),
+        disbursementDate: disbursementDate?.toISOString(),
+        paymentSchedule: results.map(item => ({
+          month: item.month,
+          principal: item.principal,
+          interest: item.interest, 
+          amount: item.amount,
+          dueDate: item.dueDate.toISOString(),
+          status: 'NOT_PAID'
+        }))
+      };
+
+      const response = await fetch('/api/loans', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(loanData),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create loan');
+      }
+
+      const data = await response.json();
+      toast.success('Loan created successfully!');
+      return data;
+    } catch (error) {
+      console.error('Error creating loan:', error);
+      toast.error('Failed to create loan');
+      throw error;
+    } finally {
+      setIsCreatingLoan(false);
+    }
   };
 
   return (
@@ -140,16 +209,27 @@ export default function LoanCalculator({
           </svg>
         </div>
 
-        <div className="relative z-10">
-          <div className="flex items-center">
-            <h1 className="text-2xl font-bold text-white mb-2">Loan Calculator</h1>
-            <div className="ml-3 px-2 py-1 bg-brand-orange text-white text-xs font-bold uppercase rounded-full">
-              Reducing Balance
+        <div className="relative z-10 flex justify-between items-start">
+          <div>
+            <div className="flex items-center">
+              <h1 className="text-2xl font-bold text-white mb-2">Loan Calculator</h1>
+              <div className="ml-3 px-2 py-1 bg-brand-orange text-white text-xs font-bold uppercase rounded-full">
+                Reducing Balance
+              </div>
             </div>
+            <p className="text-blue-100 max-w-xl">
+              Calculate loan repayments using the reducing balance method for fair and transparent interest rates
+            </p>
           </div>
-          <p className="text-blue-100 max-w-xl">
-            Calculate loan repayments using the reducing balance method for fair and transparent interest rates
-          </p>
+          
+          {onClose && (
+            <button 
+              onClick={onClose}
+              className="text-white hover:text-blue-200 focus:outline-none"
+            >
+              <X className="h-6 w-6" />
+            </button>
+          )}
         </div>
       </div>
       
@@ -423,13 +503,24 @@ export default function LoanCalculator({
             <div className="mt-6 flex justify-end">
               <button
                 type="button"
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-brand-orange hover:bg-brand-orange-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-orange"
-                onClick={() => {
-                  // Implementation for creating the loan will be added later
-                  toast.success('Loan created successfully!');
-                }}
+                disabled={isCreatingLoan}
+                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${
+                  isCreatingLoan 
+                    ? 'bg-gray-400 cursor-not-allowed' 
+                    : 'bg-brand-orange hover:bg-brand-orange-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-orange'
+                }`}
+                onClick={createLoan}
               >
-                Create Loan
+                {isCreatingLoan ? (
+                  <>
+                    <Loader className="animate-spin -ml-1 mr-2 h-4 w-4" />
+                    Creating Loan...
+                  </>
+                ) : (
+                  <>
+                    Create Loan
+                  </>
+                )}
               </button>
             </div>
           )}

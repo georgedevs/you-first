@@ -4,14 +4,14 @@ import { createServerClient } from '@supabase/ssr';
 
 export async function POST(req: NextRequest) {
   try {
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          async get(name: string) {
-            return (await cookieStore).get(name)?.value;
+          get(name: string) {
+            return cookieStore.get(name)?.value;
           },
         },
       }
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
       interest: payment.interest,
       amount: payment.amount,
       due_date: payment.dueDate,
-      status: 'NOT_PAID'
+      status: payment.status || 'NOT_PAID'
     }));
     
     // Insert payment schedule
